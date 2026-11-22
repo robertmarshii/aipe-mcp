@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aipe": {
+      "command": "npx",
+      "args": ["-y", "aipe-mcp"]
+    }
+  }
+}
