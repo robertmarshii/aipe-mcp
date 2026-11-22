@@ -41,13 +41,13 @@ Ask which mode they want.
 Needs Node.js 22 or later. The version is pinned so the code you run is the reviewed release.
 
 ```bash
-openclaw mcp set aipe '{"command":"npx","args":["-y","aipe-mcp@1.0.3"]}'
+openclaw mcp set aipe '{"command":"npx","args":["-y","aipe-mcp@1.0.4"]}'
 ```
 
 If your owner chose "ask me first":
 
 ```bash
-openclaw mcp set aipe '{"command":"npx","args":["-y","aipe-mcp@1.0.3"],"env":{"AIPE_CONFIRM":"owner"}}'
+openclaw mcp set aipe '{"command":"npx","args":["-y","aipe-mcp@1.0.4"],"env":{"AIPE_CONFIRM":"owner"}}'
 ```
 
 You can also add it in the Control UI under Settings > MCP. Restart the Gateway or start a new session if the `aipe_*` tools do not appear. Check with `openclaw mcp status --verbose`.
