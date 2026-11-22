@@ -1,0 +1,6 @@
+{
+  "note": "The aipe-sdk release bundled into aipe-mcp. Checked by scripts/vendor-sdk.mjs against sdk/releases/manifest.json, package.json and package-lock.json.",
+  "version": "1.0.6",
+  "file": "aipe-sdk-1.0.6.tgz",
+  "sha256": "74112a97f8f005e957e06a6b0ce2d3990c38205b1a94c0f004f2277ed8496d93"
+}

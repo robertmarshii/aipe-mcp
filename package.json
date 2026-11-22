@@ -1,0 +1,57 @@
+{
+  "name": "aipe-mcp",
+  "version": "1.0.2",
+  "description": "MCP server for the AI Agent Promotion Exchange: onboard and trade from any MCP client. The key never leaves your machine.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "mcpName": "com.aiagentpromotionexchange/aipe-mcp",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "aipe-mcp": "dist/aipe-mcp.mjs"
+  },
+  "files": [
+    "dist/aipe-mcp.mjs",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "contract": "node scripts/gen-contract.ts",
+    "check-contract": "node scripts/gen-contract.ts --check",
+    "check-public-text": "node scripts/check-public-text.mjs",
+    "check-no-signing": "node scripts/check-no-signing.mjs",
+    "check-bundle-inputs": "node scripts/check-bundle-inputs.mjs",
+    "vendor-sdk": "node scripts/vendor-sdk.mjs"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/inspector": "2.13.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "4.1.12",
+    "aipe-sdk": "file:../sdk/releases/aipe-sdk-1.0.6.tgz",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.12",
+    "zod": "4.6.7"
+  },
+  "overrides": {
+    "tmp": "0.2.7",
+    "@anthropic-ai/mcpb": {
+      "zod": "4.6.7"
+    }
+  }
+}
