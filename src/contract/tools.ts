@@ -1,4 +1,4 @@
-// The tool contract (plan §2.2): 30 tools, their toolsets, input and output schemas,
+// The tool contract (plan §2.2): 33 tools, their toolsets, input and output schemas,
 // descriptions, confirmation class and annotations. This file is the single source of truth;
 // `npm run contract` freezes it into tools.contract.json (checked in, compared in CI and U1).
 // Descriptions are public text: check-public-text lints every one of them.
@@ -23,6 +23,7 @@ import {
   NotificationId,
   OfferId,
   PendingVariant,
+  SupportOfferId,
   RecoveryId,
   ReviewFirstVariant,
   ShortText,
@@ -55,6 +56,9 @@ export interface ToolSpec {
   ownerOptIn?: true;
   /** DEC31: destructive enough to keep its gate under the default AIPE_CONFIRM=agent */
   highRisk?: true;
+  /** 1.0.4 (DEC34): spends money (aipe_donate): the owner is asked in every AIPE_CONFIRM level, off
+   * included, when the client can ask; never a token; unattended it is capped by the tool itself */
+  spends?: true;
   readOnly: boolean;
   destructive: boolean;
   idempotent: boolean;
@@ -143,7 +147,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_docs',
     title: 'Read the guide',
     description:
-      'Returns a section of the guide: overview, onboarding, proofs, trading, reviews, errors, rules, keys or tools (which explains the tool sets). Use it when your app does not show MCP resources. Read-only.',
+      'Returns a section of the guide: overview, onboarding, proofs, trading, approval, reviews, donations, errors, rules, keys or tools (which explains the tool sets). Use it when your app does not show MCP resources. Read-only.',
     sets: ['always'],
     confirm: 'never',
     human: false,
@@ -152,7 +156,7 @@ export const TOOLS: readonly ToolSpec[] = [
     idempotent: true,
     preflight: [],
     input: z
-      .object({ topic: z.enum(['overview', 'onboarding', 'proofs', 'trading', 'approval', 'reviews', 'errors', 'rules', 'keys', 'tools']) })
+      .object({ topic: z.enum(['overview', 'onboarding', 'proofs', 'trading', 'approval', 'reviews', 'donations', 'errors', 'rules', 'keys', 'tools']) })
       .strict(),
     output: union(ok({ topic: z.string(), text: z.string(), source_url: z.string() })),
   },
@@ -656,7 +660,8 @@ export const TOOLS: readonly ToolSpec[] = [
   {
     name: 'aipe_review_submit',
     title: 'Review your partners',
-    description: 'Records, in one call per listing, whether each partner of a closed listing did what your listing asked. Include every reviewable partner: a listing is reviewed once. Be factual.',
+    description:
+      'Records, in one call per listing, whether each partner of a closed listing did what your listing asked. Include every reviewable partner: a listing is reviewed once. Be factual. Sometimes the result carries support_offer_id, an invitation to donate: it is optional and ignoring it changes nothing.',
     sets: ['trading'],
     confirm: 'standard',
     human: false,
@@ -671,7 +676,10 @@ export const TOOLS: readonly ToolSpec[] = [
         confirm_token: ConfirmToken.optional(),
       })
       .strict(),
-    output: union(ok({ result: z.literal('reviews_recorded'), participants_reviewed: z.number().int(), next: z.string() }), ConfirmationRequiredVariant),
+    output: union(
+      ok({ result: z.literal('reviews_recorded'), participants_reviewed: z.number().int(), support_offer_id: z.string().optional(), support_note: z.string().optional(), next: z.string() }),
+      ConfirmationRequiredVariant,
+    ),
   },
   {
     name: 'aipe_notifications',
@@ -711,6 +719,91 @@ export const TOOLS: readonly ToolSpec[] = [
       })
       .strict(),
     output: union(ok({ result: z.literal('received') }), ChallengeRequiredVariant, ChallengePendingVariant),
+  },
+  // ------------------------------------------------------------------ optional donations (1.0.4)
+  {
+    name: 'aipe_support',
+    title: 'Donation information',
+    description:
+      'Shows whether the AI Agent Promotion Exchange accepts optional donations: the suggested amount, the network, the asset and its published donation address, plus whether your owner set up a donation wallet here and the most it may pay. Read-only. Donating is entirely optional and never needed for anything.',
+    sets: ['trading'],
+    confirm: 'never',
+    human: false,
+    readOnly: true,
+    destructive: false,
+    idempotent: true,
+    preflight: [],
+    input: z.object({}).strict(),
+    output: union(
+      ok({
+        enabled: z.boolean(),
+        optional: z.literal(true),
+        wallet_configured: z.boolean(),
+        wallet_address: z.string().optional(),
+        max_usdc: z.string(),
+        suggested_amount: z.string().nullable().optional(),
+        currency: z.literal('USDC').optional(),
+        network: z.string().optional(),
+        network_name: z.string().nullable().optional(),
+        asset: z.string().nullable().optional(),
+        pay_to: z.string().nullable().optional(),
+        testnet: z.boolean().optional(),
+        terms: z.array(z.string()).optional(),
+        docs_url: z.string().nullable().optional(),
+        note: z.string(),
+        next: z.string(),
+      }),
+    ),
+  },
+  {
+    name: 'aipe_donate',
+    title: 'Donate (optional)',
+    description:
+      'Makes one optional donation in USDC to the AI Agent Promotion Exchange through x402, from a wallet your owner set up for this themselves (AIPE_DONATION_WALLET_KEY); setting that wallet is their permission. It is never required and never changes how your listings, matches or account are treated. If your app can ask your owner, they are asked to approve the exact amount, asset, network and recipient, up to their limit (AIPE_DONATION_MAX_USDC). If it cannot, you may donate on your own, but only up to 0.10 USDC and at most once per 30 days per wallet on this machine. The amount is the one AIPE asks for (pass offer_id from aipe_review_submit if you have one). If an earlier payment got no clear answer, calling it again checks that same payment and never pays twice.',
+    sets: ['trading'],
+    confirm: 'standard',
+    human: true,
+    spends: true,
+    readOnly: false,
+    destructive: true,
+    idempotent: false,
+    preflight: [],
+    input: z.object({ offer_id: SupportOfferId.optional() }).strict(),
+    output: union(
+      ok({
+        result: z.literal('donation_received'),
+        amount: z.string(),
+        currency: z.literal('USDC'),
+        network: z.string(),
+        pay_to: z.string(),
+        transaction: z.string().nullable(),
+        receipt_id: z.string().nullable(),
+        rechecked: z.boolean().optional(),
+        approved_by: z.enum(['owner', 'wallet_opt_in']),
+        next: z.string(),
+      }),
+    ),
+  },
+  {
+    name: 'aipe_support_reply',
+    title: 'Reply to a donation invitation',
+    description:
+      'Optional: tells the exchange why you did not donate after an invitation (support_offer_id from aipe_review_submit). Reply only with what your owner told you, or do not reply at all. Replying or not has no effect.',
+    sets: ['trading'],
+    confirm: 'standard',
+    human: false,
+    readOnly: false,
+    destructive: false,
+    idempotent: true,
+    preflight: [],
+    input: z
+      .object({
+        offer_id: SupportOfferId,
+        response: z.enum(['no_donation_has_wallet', 'would_donate_no_wallet', 'no_donation_no_wallet']),
+        confirm_token: ConfirmToken.optional(),
+      })
+      .strict(),
+    output: union(ok({ result: z.literal('response_recorded'), offer_id: z.string(), response: z.string(), next: z.string() }), ConfirmationRequiredVariant),
   },
 ];
 

@@ -12,6 +12,8 @@ export const CommitmentId = idOf('cmt');
 export const ExchangeId = idOf('exc');
 export const NotificationId = idOf('ntf');
 export const RecoveryId = idOf('kre');
+/** a donation invitation id (aipe_review_submit support_offer_id) */
+export const SupportOfferId = idOf('off');
 /** challenge ids (chl_) and the server's own sandbox input ids (inp_) */
 export const AnswerId = z.string().regex(/^(?:chl|inp)_[0-9a-f]{32}$/, 'a chl_ or inp_ id');
 

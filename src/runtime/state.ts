@@ -1,4 +1,5 @@
-// Local state (plan §1.4): state.json holds no secret. Mode 0600, atomic write (temp file +
+// Local state (plan §1.4): state.json holds no secret. (Donation records are per wallet, at the
+// AIPE_HOME root: src/runtime/walletstore.ts.) Mode 0600, atomic write (temp file +
 // rename), and re-read before every write so two writers never lose each other's changes.
 import { randomBytes } from 'node:crypto';
 import { chmod, open, readFile, rename, rm } from 'node:fs/promises';

@@ -1,5 +1,45 @@
 # aipe-mcp changelog
 
+## 1.0.4
+
+- **Optional donations.** Three new tools in the trading set (now 21 tools; 33 in all):
+  - `aipe_support` (read-only): whether donations are open, the suggested amount, network,
+    asset and published donation address, whether a donation wallet is set up here and the
+    most it may pay.
+  - `aipe_donate`: one donation in USDC through x402 (v2, exact scheme), from a wallet the owner
+    sets up themselves with `AIPE_DONATION_WALLET_KEY` (a 0x private key); setting it is the
+    owner's permission. When the client can ask the owner (elicitation), the owner approves the
+    exact amount, asset, network and recipient every time, in every `AIPE_CONFIRM` level, `off`
+    included, up to `AIPE_DONATION_MAX_USDC`. When it cannot, the agent may donate on its own
+    within hard limits: at most 0.10 USDC and one donation per 30 days per wallet on this machine
+    (kept in `<AIPE_HOME>/donations/`, shared by every profile using the wallet, across restarts
+    and processes; an unresolved payment counts too). It never
+    uses a confirm token. `strict` and `AIPE_CONFIRM_VIA=elicit` refuse it without
+    elicitation. Without a wallet it answers `LOCAL_DONATION_NO_WALLET` and sends nothing.
+  - `aipe_support_reply`: the optional reply to a donation invitation (no effect).
+- **Safety checks before anything is signed:** only USDC on Base (and Base Sepolia when
+  `AIPE_ENV` is staging or test), only a plain EIP-3009 authorisation, network and asset equal to
+  what the exchange publishes, the recipient equal to the published donation address, and the
+  amount at most `AIPE_DONATION_MAX_USDC` (default 0.10, never above 1.00). On Base mainnet (any
+  environment) the recipient must also equal the exchange's donation address built into the
+  server. Anything else is
+  `LOCAL_DONATION_REFUSED`. Terms that change after the check are refused too.
+- **One payment per call, never twice:** donations run one at a time per wallet (a lock file next
+  to the wallet's record; a stale lock is taken over safely, and the record is re-checked in the
+  same atomic update that saves the payment, before it is sent).
+  The signed payment is kept in the profile, per environment and base URL, until a clear answer
+  comes back; after an unknown outcome (`LOCAL_DONATION_UNKNOWN`) the next call re-sends that same
+  payment, which the exchange answers from its records. Once it can no longer settle and the
+  exchange still cannot confirm it, it is released and counted as possibly paid
+  (`LOCAL_DONATION_EXPIRED`).
+- **The wallet key** is read once at start and removed from the process environment. It is
+  never logged, returned, saved or shown; the frame redactor and the outgoing-text check block
+  it like the agent key. This is the only signing the server does itself; agent requests are
+  still signed by the SDK (the signing check now also catches `import()` and `require()`).
+- **aipe_review_submit** returns `support_offer_id` (and a short note) when the exchange invites
+  an optional donation; ignoring it changes nothing. New `aipe_docs` topic `donations`.
+- The bundle now includes the x402 client and viem (local signing only) and their licences.
+
 ## 1.0.3
 
 - **The agent trades on its own by default (DEC31).** New `AIPE_CONFIRM=agent` default: creating

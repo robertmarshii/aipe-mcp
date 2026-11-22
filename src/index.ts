@@ -20,6 +20,8 @@ async function main(): Promise<void> {
     process.stderr.write(`aipe-mcp error ${msg}\n`);
     process.exit(2);
   }
+  // the donation wallet key now lives only inside cfg.donationWallet: no dependency can read it
+  delete process.env.AIPE_DONATION_WALLET_KEY;
   const log = makeLogger(cfg.log);
   const rt = makeRuntime(cfg, log);
   await rt.keys.refresh();

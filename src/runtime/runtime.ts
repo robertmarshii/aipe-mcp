@@ -34,8 +34,10 @@ export class KeyRing implements SeedSource {
     return { trustPerms: this.#cfg.trustPerms, platform: this.#cfg.platform };
   }
 
+  /** the agent keys, plus the owner's donation wallet key (1.0.4), which is never refreshed away */
   seeds(): readonly Uint8Array[] {
-    return this.#seeds;
+    const w = this.#cfg.donationWallet;
+    return w === undefined ? this.#seeds : [...this.#seeds, w.redactionSeed()];
   }
 
   add(seed: Uint8Array): void {

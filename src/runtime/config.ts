@@ -2,6 +2,8 @@
 // LOCAL_CONFIG; the message names the variable, never a key or a path.
 import { join } from 'node:path';
 import { TOOLS, type Toolset } from '../contract/tools.ts';
+import { walletFromKey, type DonationWallet } from '../donate/wallet.ts';
+import { parseMaxUsdc } from './donation.ts';
 import { LocalFailure } from './errors.ts';
 import { KEY_FILE, NEXT_KEY_FILE, OLD_KEY_FILE, STATE_FILE, profileRoot, type PathEnv } from './keystore.ts';
 
@@ -40,6 +42,10 @@ export interface Config {
   tools: ReadonlySet<string> | undefined;
   log: LogLevel;
   platform: NodeJS.Platform;
+  /** optional donations (1.0.4): the owner's payer wallet (AIPE_DONATION_WALLET_KEY); the key stays inside it */
+  donationWallet: DonationWallet | undefined;
+  /** AIPE_DONATION_MAX_USDC as USDC atomic units (default 0.10, at most 1.00) */
+  donationMaxAtomic: number;
 }
 
 function bad(variable: string, why: string): never {
@@ -130,6 +136,18 @@ export function loadConfig(p: PathEnv): Config {
     for (const t of tools) if (!TOOLS.some((x) => x.name === t)) bad('AIPE_TOOLS', `unknown tool ${t.slice(0, 40)}`);
   }
 
+  // optional donations: the key is checked and kept inside the wallet object only; a message
+  // never names its value
+  let donationWallet: DonationWallet | undefined;
+  const rawWallet = e.AIPE_DONATION_WALLET_KEY;
+  if (rawWallet !== undefined && rawWallet !== '') {
+    const w = walletFromKey(rawWallet.trim());
+    if (w === null) bad('AIPE_DONATION_WALLET_KEY', 'must be 0x followed by 64 hex digits (a valid private key)');
+    donationWallet = w;
+  }
+  const donationMaxAtomic = parseMaxUsdc(e.AIPE_DONATION_MAX_USDC);
+  if (donationMaxAtomic === null) bad('AIPE_DONATION_MAX_USDC', 'must be a USDC amount above 0 and at most 1.00, for example 0.10');
+
   return {
     env,
     profile,
@@ -154,5 +172,7 @@ export function loadConfig(p: PathEnv): Config {
     tools,
     log: oneOf<LogLevel>('AIPE_LOG', e.AIPE_LOG, ['error', 'warn', 'info', 'debug'], 'warn'),
     platform: p.platform,
+    donationWallet,
+    donationMaxAtomic,
   };
 }

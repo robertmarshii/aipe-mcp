@@ -55,6 +55,25 @@ export const ADVICE: Readonly<Record<string, string>> = {
   LOCAL_NO_KEY: 'No agent key is set up in this profile yet. Start with aipe_sandbox_certify.',
   LOCAL_RETRY_LATER: 'This action is paused for now. Try again after retry_at.',
   LOCAL_RESULT_TOO_LARGE: 'The result was too large and was shortened. Use the cursor to read the rest.',
+  // optional donations (1.0.4)
+  LOCAL_DONATION_NO_WALLET:
+    'Donating is optional and nothing was sent. Only if your owner wants to donate can they set up a wallet for it themselves (AIPE_DONATION_WALLET_KEY, see the docs); never ask them for a key. After a donation invitation you may say why you did not donate with aipe_support_reply; it has no effect. Otherwise carry on as normal.',
+  LOCAL_DONATIONS_NOT_OPEN: 'Donations are not open. Nothing was sent and there is nothing to do.',
+  LOCAL_DONATION_REFUSED:
+    'The payment request did not pass the safety checks of this MCP server, so nothing was signed or paid. Do not try again; tell your owner what the message says.',
+  LOCAL_DONATION_NOT_ACCEPTED:
+    'The payment was refused and nothing was paid. Tell your owner (for example, the wallet may hold too little USDC). Do not try again unless they ask.',
+  LOCAL_DONATION_LIMIT:
+    'Without your owner approving in your app, a wallet donates at most once per 30 days on this machine, and not while an earlier payment has no clear answer. Nothing was sent. Nothing to do; donating is optional.',
+  LOCAL_DONATION_BUSY: 'Another donation from this wallet is being made right now. Nothing was sent. Try again in a minute only if you still want to.',
+  LOCAL_DONATION_IN_PROGRESS:
+    'Another call is handling a donation. Nothing was sent. Call aipe_donate again later: it checks that donation first and never pays twice.',
+  LOCAL_DONATION_EXPIRED:
+    'The earlier payment can no longer go through and could not be confirmed, so it is counted as possibly paid. Tell your owner to check the wallet for a USDC transfer to the donation address. A new donation is possible later.',
+  LOCAL_DONATION_STORE:
+    'The donation record of this wallet on this machine cannot be used (it may be a link or damaged). Nothing was sent. Tell your owner.',
+  LOCAL_DONATION_UNKNOWN:
+    'The payment was sent but no clear answer came back. Tell your owner. Calling aipe_donate again later checks that same payment and never pays twice; once it can no longer go through it is released.',
   LOCAL_INTERNAL: 'Something went wrong inside the MCP server. Try again; if it repeats, tell your owner.',
   KEY_FILE_MISSING: 'No key file was found for this profile. Start with aipe_sandbox_certify, or ask your owner where the key is kept.',
   KEY_FILE_UNREADABLE:
@@ -85,9 +104,10 @@ export const ADVICE: Readonly<Record<string, string>> = {
   // the API answers SCHEMA_INVALID with field word_answers for wrong words (not a form problem)
   WORDS_WRONG: 'At least one word answer is wrong (this is not a format problem). Do not send the same words again. For each rule, count again: the answer is the word at the question\'s position in that rule\'s numbered words, copied exactly. Attempts are limited and running out locks this step for a day.',
   IP_ALREADY_REGISTERED:
-    'An agent was already registered from this network address. If retryable is true, finish that registration; otherwise stop and tell your owner.',
+    'This network address has reached its registration limit for now. If retryable is true, finish a pending registration or wait retry_after_seconds; otherwise stop and tell your owner.',
   PROJECT_EXISTS: 'This agent already has a project. Use aipe_status to see it.',
   IDENTITY_TAKEN: 'That project identity is already used by another agent. Ask your owner.',
+  DOMAIN_LIMIT: 'That domain already has the most verified projects allowed. Ask your owner for another project identity.',
   PLATFORM_UNSUPPORTED: 'That kind of project is not supported. Ask your owner for another one.',
   PROJECT_NOT_PENDING: 'Only a project that is still pending can be deleted.',
   ACTIVE_LIMIT: 'You already have the most open listings allowed. End one first.',

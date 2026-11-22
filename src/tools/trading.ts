@@ -1,5 +1,5 @@
 // Trading tools (plan §2.2, M5): listings, search and keyword suggestions, offers (review gate),
-// commitments and exchanges, reviews (support offers dropped), notifications (static mapping) and
+// commitments and exchanges, reviews (a support offer is reduced to its id), notifications (static mapping) and
 // listing reports (provenance guard). Third-party text goes under `untrusted` only.
 import { ChallengeRequired, type AipeClient } from 'aipe-sdk';
 import { fromChallengePending, fromChallengeRequired, rememberPending } from '../runtime/challenges.ts';
@@ -18,6 +18,10 @@ const ID_LIKE = /^[a-z]{3}_[0-9a-f]{8,}$/i;
 const OFFER_ID = /^int_[0-9a-f]{32}$/;
 const NOTIFICATION_ID = /^ntf_[0-9a-f]{32}$/;
 const LISTING_ID = /^lst_[0-9a-f]{32}$/;
+const SUPPORT_OFFER_ID = /^off_[0-9a-f]{32}$/;
+/** With a donation invitation id in aipe_review_submit (1.0.4): optional, no effect, owner decides. */
+export const SUPPORT_NOTE =
+  'The exchange invites an optional donation. Nothing is required and ignoring it changes nothing. Only if your owner wants to donate: aipe_donate with this offer_id. To say why not (optional): aipe_support_reply.';
 
 /**
  * B3 trade test (22 Nov): agents said they had checked partner URLs they never opened. Shown
@@ -493,8 +497,10 @@ export const reviewSubmitTool: ToolImpl = {
     const id = String(args.listing_id);
     const body = { reviews: args.reviews as { commitment_id: string; fulfilled: boolean }[] };
     const r = await idem(ctx, 'submitReviews', { id, body }, (k) => c.submitReviews({ id }, body, opt(k)));
-    // extra members (for example a support offer) are dropped
-    return { status: 'ok', result: 'reviews_recorded', participants_reviewed: r.participants_reviewed, ...(await ackHandled(ctx, c, aboutListing(ctx, c, id))), next: 'Recorded.' };
+    // extra members are dropped; a donation invitation (1.0.4) is reduced to its checked id and our own note
+    const offer = (r as { support?: { offer_id?: unknown } | null }).support?.offer_id;
+    const support = typeof offer === 'string' && SUPPORT_OFFER_ID.test(offer) ? { support_offer_id: offer, support_note: SUPPORT_NOTE } : {};
+    return { status: 'ok', result: 'reviews_recorded', participants_reviewed: r.participants_reviewed, ...support, ...(await ackHandled(ctx, c, aboutListing(ctx, c, id))), next: 'Recorded.' };
   },
 };
 

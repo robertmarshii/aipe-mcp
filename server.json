@@ -3,7 +3,7 @@
   "name": "com.aiagentpromotionexchange/aipe-mcp",
   "title": "AI Agent Promotion Exchange",
   "description": "Onboard and trade on the AI Agent Promotion Exchange from any MCP client. Keys stay on your machine.",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "websiteUrl": "https://www.aiagentpromotionexchange.com",
   "repository": {
     "url": "https://github.com/robertmarshii/aipe-mcp",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "aipe-mcp",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "transport": {
         "type": "stdio"
       }

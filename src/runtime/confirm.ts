@@ -22,6 +22,14 @@
 //      token from before the restart is refused as LOCAL_CONFIRM_RESTARTED ("ask again");
 //   3. H tools: no token, ever. Without elicitation they rely on destructiveHint and the
 //      client's own per-tool approval. A possible secret never gets a token either.
+//
+// Spending tools (aipe_donate, 1.0.4, DEC34 22 Nov 2026) are H tools that are confirmed in EVERY
+// level, off included: when the client can ask, the owner is asked, with a question key that
+// carries a fingerprint of the exact payment, so an answer never carries over to other terms.
+// They NEVER use the token path (the agent controls the owner pause, so a token would be a
+// self-approval). Without elicitation they proceed like other H tools (strict and
+// AIPE_CONFIRM_VIA=elicit refuse): the owner's opt-in is the wallet key, and the tool itself
+// enforces the unattended caps (at most 0.10 USDC, one donation per 30 days per wallet on this machine).
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -59,6 +67,8 @@ export interface ConfirmSpec {
   human: boolean;
   /** DEC31: keeps its gate under the default AIPE_CONFIRM=agent */
   highRisk?: true;
+  /** spends money (aipe_donate): asked in every level, off included, when the client can ask; never a token */
+  spends?: true;
 }
 
 export interface ConfirmationRequired {
@@ -72,6 +82,7 @@ export interface ConfirmationRequired {
 export type GateDecision = { proceed: true } | { proceed: false; result: ErrorResult | ConfirmationRequired } | { proceed: false; defer: unknown };
 
 export function needsConfirmation(spec: ConfirmSpec, level: ConfirmLevelSetting, env: string): boolean {
+  if (spec.spends === true) return true;
   if (level === 'off') return false;
   if (spec.confirmLiveOnly === true && env !== 'live') return false;
   if (spec.human) return true;
@@ -282,6 +293,8 @@ export interface GateInput {
   port: ElicitPort;
   tokens: TokenBook;
   activity: ActivityClock;
+  /** the elicitation question key (default "confirm"); spending tools bind it to the payment */
+  askKey?: string;
 }
 
 function tokenPath(i: GateInput): GateDecision {
@@ -313,7 +326,7 @@ function tokenPath(i: GateInput): GateDecision {
 }
 
 async function askHuman(i: GateInput): Promise<ElicitOutcome | { defer: unknown }> {
-  return i.port.ask('confirm', `${i.summary}\n\n${WAITING_TEXT}`);
+  return i.port.ask(i.askKey ?? 'confirm', `${i.summary}\n\n${WAITING_TEXT}`);
 }
 
 const NO_ANSWER = (): GateDecision => ({ proceed: false, result: localError('LOCAL_NO_HUMAN_ANSWER', 'no answer from the owner (not a no)') });

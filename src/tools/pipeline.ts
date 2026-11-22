@@ -1,5 +1,7 @@
 // The common path of every tool call:
 //   1. outgoing leak preflight on the tool's free-text fields (nothing sent on a refusal);
+//   1b. the tool's own local check, then its optional prepare step (aipe_donate: reads the
+//      payment terms and checks them, so the owner is asked about the exact payment);
 //   2. the confirmation gate (elicitation, token path or the H rules);
 //   3. the tool's own work inside the 45 s deadline scope;
 //   4. any thrown error normalised, then the status object turned into a CallToolResult.
@@ -19,7 +21,20 @@ export interface ToolContext {
   scope: CallScope;
   /** progress notifications, when the client sent a progressToken */
   progress(done: number, total?: number): Promise<void>;
+  /** what the tool's prepare step found (the exact terms the owner approved) */
+  prepared?: unknown;
 }
+
+/** A prepare step's answer: stop (nothing more is done), or the terms to confirm and use. */
+export type Prepared =
+  | { stop: StatusObject }
+  | {
+      /** the confirmation summary (static text plus checked values only) */
+      summary: string;
+      /** binds the owner's answer to these terms (the elicitation question key) */
+      bind: string;
+      data: unknown;
+    };
 
 export type Executor = (args: Record<string, unknown>, ctx: ToolContext) => Promise<StatusObject>;
 
@@ -31,6 +46,8 @@ export interface ToolImpl {
   summary?: Summariser;
   /** A local check before the confirmation step: a status object stops the call (nothing sent). */
   precheck?: (args: Record<string, unknown>) => StatusObject | null;
+  /** Network reads before the confirmation step (inside the deadline scope; nothing committed). */
+  prepare?: (args: Record<string, unknown>, ctx: { rt: Runtime; spec: ToolSpec; canElicit: boolean }) => Promise<Prepared>;
 }
 
 export interface CallInput {
@@ -67,6 +84,14 @@ export async function runTool(c: CallInput): Promise<CallOutput> {
     // 1b. the tool's own local check (before any owner is asked)
     const stop = c.impl.precheck?.(args) ?? null;
     if (stop !== null) return toToolResult(stop);
+    // 1c. the tool's prepare step (reads only)
+    let prepared: Extract<Prepared, { bind: string }> | undefined;
+    if (c.impl.prepare !== undefined) {
+      const prepare = c.impl.prepare;
+      const p = await withDeadline(() => prepare(args, { rt, spec, canElicit: c.port.canElicit }), rt.now);
+      if ('stop' in p) return toToolResult(p.stop);
+      prepared = p;
+    }
     // 2. confirmation
     const gate = await confirmGate({
       spec: confirmSpecOf(spec, rt.cfg.confirmAccept),
@@ -75,10 +100,11 @@ export async function runTool(c: CallInput): Promise<CallOutput> {
       env: rt.cfg.env,
       args,
       confirmToken: typeof confirmToken === 'string' ? confirmToken : undefined,
-      summary: c.impl.summary?.(args) ?? `${spec.title}.`,
+      summary: prepared?.summary ?? c.impl.summary?.(args) ?? `${spec.title}.`,
       port: c.port,
       tokens: rt.tokens,
       activity: rt.activity,
+      ...(prepared === undefined ? {} : { askKey: `confirm_${prepared.bind.slice(0, 16)}` }),
     });
     if (!gate.proceed) return 'defer' in gate ? { defer: gate.defer } : toToolResult(gate.result as unknown as StatusObject);
     // 3. a recovered key takes over before any non-read-only tool (never in aipe_status)
@@ -89,7 +115,7 @@ export async function runTool(c: CallInput): Promise<CallOutput> {
       const out = await withDeadline(
         (scope) => {
           scopeRef = scope;
-          return c.impl.execute(args, { rt, spec, port: c.port, scope, progress: c.progress });
+          return c.impl.execute(args, { rt, spec, port: c.port, scope, progress: c.progress, ...(prepared === undefined ? {} : { prepared: prepared.data }) });
         },
         rt.now,
       );

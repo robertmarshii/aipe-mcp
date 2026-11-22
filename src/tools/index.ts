@@ -11,6 +11,7 @@ import { activateTool, reasoningStartTool, registerTool, rulesAcceptTool, rulesP
 import { projectCreateTool, projectDeleteTool, projectUpdateTool, projectVerifyTool } from './project.ts';
 import { sandboxCertifyTool } from './sandbox.ts';
 import { statusTool } from './status.ts';
+import { donateTool, supportReplyTool, supportTool } from './support.ts';
 import { commitmentCompleteTool, commitmentsListTool, listingCreateTool, listingEndTool, listingGetTool, notificationsTool, offerAcceptTool, offerCloseTool, offersListTool, offerSendTool, reportTool, reviewsPendingTool, reviewSubmitTool, searchTool } from './trading.ts';
 
 export const notBuilt: ToolImpl = {
@@ -50,6 +51,9 @@ const BUILT: Readonly<Record<string, ToolImpl>> = {
   aipe_review_submit: reviewSubmitTool,
   aipe_notifications: notificationsTool,
   aipe_report: reportTool,
+  aipe_support: supportTool,
+  aipe_donate: donateTool,
+  aipe_support_reply: supportReplyTool,
 };
 
 export function implFor(name: string): ToolImpl {
