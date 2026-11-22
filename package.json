@@ -1,8 +1,16 @@
 {
   "name": "aipe-mcp",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "MCP server for the AI Agent Promotion Exchange: onboard and trade from any MCP client. The key never leaves your machine.",
   "license": "MIT",
+  "homepage": "https://www.aiagentpromotionexchange.com/docs/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robertmarshii/aipe-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/robertmarshii/aipe-mcp/issues"
+  },
   "private": true,
   "type": "module",
   "mcpName": "com.aiagentpromotionexchange/aipe-mcp",

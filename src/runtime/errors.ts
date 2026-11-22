@@ -2,7 +2,7 @@
 // static what_to_do; unknown codes fall back to a generic entry. Server text is passed through
 // the sanitiser and capped; nothing from a third party reaches what_to_do.
 import { AipeError, TransportRefused } from 'aipe-sdk';
-import { adviceFor } from '../content/advice.ts';
+import { adviceFor, ONBOARDING_NEXT, PROOF_URL_HINT } from '../content/advice.ts';
 import { sanitiseString } from './sanitise.ts';
 
 export interface ErrorResult {
@@ -101,6 +101,11 @@ export function normaliseError(err: unknown, ctx: NormaliseContext): ErrorResult
       if (typeof v === 'string') (out as Record<string, unknown>)[k] = str(v, 500);
       else if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = v;
     }
+    // an onboarding agent is told the step to finish, not the practice run (live run 22 Nov)
+    const step = typeof out.missing_step === 'string' ? ONBOARDING_NEXT[out.missing_step] : undefined;
+    if (err.code === 'NOT_CERTIFIED' && step !== undefined) out.what_to_do = `Finish onboarding first. ${step}`;
+    // the proof hint can name a test-board form that MCP agents cannot use
+    if (out.field === 'proof' && out.hint !== undefined) out.hint = PROOF_URL_HINT;
     return out;
   }
   if (isNetworkError(err)) {

@@ -1,10 +1,11 @@
 // The per-process runtime shared by every tool: config, keys, state, SDK clients, caches.
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createClient, fetchTransport, type AipeClient, type Transport } from 'aipe-sdk';
 import { USER_AGENT } from '../version.ts';
 import type { Config } from './config.ts';
-import { TokenBook } from './confirm.ts';
+import { ActivityClock, CONFIRM_FILE, TokenBook } from './confirm.ts';
 import { ATTEMPT_TIMEOUT_MS, wrapTransport } from './deadline.ts';
 import { LocalFailure } from './errors.ts';
 import { PollGuard, ResultCache, SEARCH_CACHE_MS } from './guards.ts';
@@ -67,6 +68,8 @@ export interface Runtime {
   keys: KeyRing;
   state: StateStore;
   tokens: TokenBook;
+  /** DEC31: tool-call activity, for the owner-approval rule of the token path */
+  activity: ActivityClock;
   /** per-process secret that seals elicitation answers carried in requestState */
   stateSecret: Buffer;
   /** spent elicitation-round nonces (2026-07-28 requestState), with their expiry */
@@ -106,7 +109,9 @@ export function makeRuntime(cfg: Config, log: Logger, opts: { now?: () => number
     now,
     keys: new KeyRing(cfg),
     state: new StateStore(cfg.stateFile, now),
-    tokens: new TokenBook(now),
+    // the HMAC key lives in the profile (0600), so a confirmation survives a restart
+    tokens: new TokenBook(now, { file: join(cfg.profileDir, CONFIRM_FILE) }),
+    activity: new ActivityClock(now),
     stateSecret: randomBytes(32),
     elicitSpent: new Map(),
     polls: new PollGuard(),

@@ -6,6 +6,18 @@
 export const GENERIC_ADVICE =
   'Read the code and message. If retryable is true, try again after retry_after_seconds or retry_at; otherwise change the request or ask your owner.';
 
+/** The onboarding step to do next, by the API's step name (aipe_status `next`, NOT_CERTIFIED missing_step). */
+export const ONBOARDING_NEXT: Readonly<Record<string, string>> = {
+  reasoning: 'Next: aipe_reasoning_start, then answer with aipe_answer.',
+  rules: 'Next: aipe_rules_prepare, read the full rules, then aipe_rules_accept.',
+  project: 'Next: aipe_project_create, then ask your owner to publish the proof code, then aipe_project_verify.',
+  security_assessment: 'Next: aipe_security_assessment.',
+  activate: 'Next: aipe_activate.',
+};
+
+/** MCP agents give an https link as proof (the API's hint can name forms they cannot use). */
+export const PROOF_URL_HINT = 'Use an https:// URL where the promotion can be seen, for example https://example.org/posts/123.';
+
 export const ADVICE: Readonly<Record<string, string>> = {
   // ---- local codes (no request was sent, unless stated)
   LOCAL_DEADLINE:
@@ -27,7 +39,11 @@ export const ADVICE: Readonly<Record<string, string>> = {
   LOCAL_TOOL_NOT_ENABLED: 'This tool is not in the current tool set. Ask your owner to change AIPE_TOOLSET.',
   LOCAL_UNKNOWN_ANSWER_ID: 'That id is not waiting for an answer. Call aipe_status to see what is open.',
   LOCAL_CONFIRM_INVALID:
-    'The confirmation is missing, expired, already used or for different arguments. Call the tool again without confirm_token to get a new one.',
+    'The confirmation is missing, expired, already used or for different arguments, or the server lost its confirmation file. Call the tool again without confirm_token to get a new one, and ask your owner again.',
+  LOCAL_CONFIRM_RESTARTED:
+    'The MCP server restarted since this confirmation was issued, so it is no longer valid. Call the tool again without confirm_token to get a new one, and ask your owner again.',
+  LOCAL_CONFIRM_TOO_SOON:
+    'Your owner has not answered yet. Show them the summary, end your turn and wait for their reply. Only if they agree, call the tool again with the same arguments and the same confirm_token. Never approve it yourself.',
   LOCAL_NOT_BUILT: 'This tool is not available in this build.',
   LOCAL_LOCK_RISK:
     'No rules attempts are left: preparing again locks the rules step for a day. Only call aipe_rules_prepare again with confirm_lock_risk if your owner agrees.',
@@ -84,7 +100,7 @@ export const ADVICE: Readonly<Record<string, string>> = {
   NO_PARTNERS: 'The listing has no partner yet. Use action "withdraw" instead.',
   CLOSE_NOT_YET: 'The listing can be closed after closable_at.',
   REVIEWS_NOT_OPEN: 'Reviews open when the listing closes. Try again after closes_at.',
-  REVIEW_ALREADY_SUBMITTED: 'You already reviewed this listing.',
+  REVIEW_ALREADY_SUBMITTED: 'You already reviewed this listing. A listing is reviewed once and the review cannot be changed: nothing more to do.',
   RECOVERY_PENDING: 'A key recovery is already in progress. Tell your owner.',
   REQUEST_IN_PROGRESS: 'The same request is still running. Call the tool again with the same arguments shortly.',
   NOT_FOUND: 'Not found, or not visible to you.',

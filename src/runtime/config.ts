@@ -6,7 +6,8 @@ import { LocalFailure } from './errors.ts';
 import { KEY_FILE, NEXT_KEY_FILE, OLD_KEY_FILE, STATE_FILE, profileRoot, type PathEnv } from './keystore.ts';
 
 export type AipeEnv = 'live' | 'sandbox' | 'staging' | 'test';
-export type ConfirmLevelSetting = 'strict' | 'standard' | 'off';
+/** DEC31: agent (default) | owner ("ask me first") | strict | off; `standard` is read as owner. */
+export type ConfirmLevelSetting = 'agent' | 'owner' | 'strict' | 'off';
 export type ConfirmVia = 'auto' | 'elicit' | 'token';
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
@@ -23,7 +24,7 @@ export interface Config {
   stateFile: string;
   trustPerms: boolean;
   confirm: ConfirmLevelSetting;
-  /** DEC26: who approves aipe_offer_accept: the agent alone (default) or the owner (H tool); strict means owner */
+  /** DEC26: who approves aipe_offer_accept: the agent alone (default) or the owner (H tool); owner and strict levels mean owner */
   confirmAccept: 'agent' | 'owner';
   confirmVia: ConfirmVia;
   /** staging/test only */
@@ -66,6 +67,16 @@ function checkBaseUrl(variable: string, raw: string): string {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') bad(variable, 'must be http(s)');
   if (!u.pathname.replace(/\/+$/, '').endsWith('/v1')) bad(variable, "must end in '/v1'");
   return raw.replace(/\/+$/, '');
+}
+
+/**
+ * AIPE_CONFIRM (DEC31, 22 Nov 2026): agent by default (the agent trades on its own; high-risk
+ * gates stay); owner asks the owner first; `standard`, the default before DEC31, is honoured as
+ * owner, so anyone who set it explicitly keeps being asked (now with the approval enforced).
+ */
+export function confirmLevel(raw: string | undefined): ConfirmLevelSetting {
+  const v = oneOf<'agent' | 'owner' | 'standard' | 'strict' | 'off'>('AIPE_CONFIRM', raw, ['agent', 'owner', 'standard', 'strict', 'off'], 'agent');
+  return v === 'standard' ? 'owner' : v;
 }
 
 export function loadConfig(p: PathEnv): Config {
@@ -130,10 +141,10 @@ export function loadConfig(p: PathEnv): Config {
     explicitKeyFile,
     stateFile: join(profileDir, STATE_FILE),
     trustPerms: perms === 'trust',
-    confirm: oneOf<ConfirmLevelSetting>('AIPE_CONFIRM', e.AIPE_CONFIRM, ['strict', 'standard', 'off'], 'standard'),
-    // AIPE_CONFIRM=strict implies owner approval for accepting offers (review of #74)
-    // (the value is checked first, so an invalid one is refused even under strict)
-    confirmAccept: ((v) => (e.AIPE_CONFIRM === 'strict' ? 'owner' : v))(oneOf<'agent' | 'owner'>('AIPE_CONFIRM_ACCEPT', e.AIPE_CONFIRM_ACCEPT, ['agent', 'owner'], 'agent')),
+    confirm: confirmLevel(e.AIPE_CONFIRM),
+    // AIPE_CONFIRM=strict (review of #74) and owner/standard ("ask me first", 22 Nov 2026) imply owner
+    // approval for accepting offers (the value is checked first, so an invalid one is refused)
+    confirmAccept: ((v) => (confirmLevel(e.AIPE_CONFIRM) === 'agent' || confirmLevel(e.AIPE_CONFIRM) === 'off' ? v : 'owner'))(oneOf<'agent' | 'owner'>('AIPE_CONFIRM_ACCEPT', e.AIPE_CONFIRM_ACCEPT, ['agent', 'owner'], 'agent')),
     confirmVia: oneOf<ConfirmVia>('AIPE_CONFIRM_VIA', e.AIPE_CONFIRM_VIA, ['auto', 'elicit', 'token'], 'auto'),
     baseUrl,
     sandboxUrl,

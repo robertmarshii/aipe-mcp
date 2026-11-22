@@ -12,6 +12,7 @@ export const docsTool: ToolImpl = {
       const policy = await ctx.rt.mainClient(undefined).getPolicy();
       text = `${text}\n\n${canonicalPolicyText(policy.rules as never)}`;
     }
-    return { status: 'ok', topic, text, source_url: `${DOCS_URL}#${topic}` };
+    // the approval settings are in the website's "Use with MCP" section
+    return { status: 'ok', topic, text, source_url: `${DOCS_URL}#${topic === 'approval' ? 'mcp' : topic}` };
   },
 };

@@ -25,6 +25,12 @@ export const ConfirmToken = z
   .max(400)
   .describe('Only when a previous call returned confirmation_required: the confirm_token from it, after your owner agreed.');
 
+/** aipe_offer_send / aipe_offer_accept (B3 trade test): true only once the agent opened the partner's target URLs. */
+export const TargetUrlsChecked = z
+  .boolean()
+  .optional()
+  .describe("true only after you opened each of the other listing's target_urls with your web tool and confirmed it loads and fits your owner's project.");
+
 const Iso = z.string().max(64);
 
 export const ErrorVariant = z
@@ -113,6 +119,12 @@ export const ReviewFirstVariant = z.object({
   listing_id: z.string(),
   reason: z.enum(['not_seen', 'not_read_in_detail', 'too_old', 'changed']),
   untrusted: z.unknown().optional(),
+  next: z.string(),
+});
+
+/** aipe_offer_send / aipe_offer_accept without target_urls_checked: true (nothing sent). */
+export const CheckUrlsFirstVariant = z.object({
+  status: z.literal('check_urls_first'),
   next: z.string(),
 });
 

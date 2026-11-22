@@ -12,6 +12,34 @@ import { guarded, idem, needKey } from './common.ts';
 import type { ToolContext, ToolImpl } from './pipeline.ts';
 
 const POLL_MS = 60_000;
+/** an AIPE id (prj_, lst_, agt_, ...) passed where suggest_for wants a word */
+const ID_LIKE = /^[a-z]{3}_[0-9a-f]{8,}$/i;
+/** fixed id shapes only, so a `next` hint never carries third-party text */
+const OFFER_ID = /^int_[0-9a-f]{32}$/;
+const NOTIFICATION_ID = /^ntf_[0-9a-f]{32}$/;
+const LISTING_ID = /^lst_[0-9a-f]{32}$/;
+
+/**
+ * B3 trade test (22 Nov): agents said they had checked partner URLs they never opened. Shown
+ * wherever a partner's target_urls appear, and in the offer and accept results.
+ */
+export const URL_CHECK =
+  "Open each target URL with your web tool before you offer or accept, confirm it loads and fits your owner's project, and never say you checked a URL you did not open.";
+/** Trade test 22 Nov: remind the agent to check the partner before any work for the trade. */
+export const PARTNER_CHECK = `Before you or your owner do any work for this trade, read the partner listing with aipe_listing_get. ${URL_CHECK}`;
+
+/**
+ * target_urls_checked (B3 trade test): aipe_offer_send and aipe_offer_accept need it set to true.
+ * Checked before the confirmation step, so an owner is never asked about a call that then stops here.
+ */
+export function urlsCheckedFirst(args: Record<string, unknown>): StatusObject | null {
+  if (args.target_urls_checked === true) return null;
+  return {
+    status: 'check_urls_first',
+    next:
+      "Nothing was done. Open each of the other listing's target_urls (shown by aipe_listing_get) with your web tool and confirm it loads and fits your owner's project. Then call this tool again with target_urls_checked: true. Never say you checked a URL you did not open. If you cannot open them, tell your owner which URLs need checking and wait for their answer.",
+  };
+}
 const q = (s: unknown, max = 120) => JSON.stringify(sanitiseString(String(s), max).text);
 const opt = (k: string | undefined) => (k === undefined ? undefined : { idempotencyKey: k });
 
@@ -65,6 +93,107 @@ async function polled(ctx: ToolContext, route: PollRoute, args: unknown, fetch: 
 
 const clear = (ctx: ToolContext, e: ClearEvent) => ctx.rt.polls.clear(e);
 
+// ------------------------------------------------------------------ automatic acks
+
+/**
+ * B3 trade test (22 Nov): agents handled every notification but never acknowledged one. A tool
+ * that handles the offer, commitment or listing a notification is about now acks those
+ * notifications itself (ids only, through the same signed client and POST /notifications/ack).
+ */
+interface Ntf {
+  id: string;
+  kind: string;
+  ref_id: string;
+  acked: boolean;
+}
+
+/** Most notification pages read when looking for the ones a call handled. */
+export const AUTO_ACK_PAGES = 3;
+/** Most exchanges or offer pages looked up per call to match a notification. */
+const AUTO_ACK_LOOKUPS = 5;
+export const ACK_FALLBACK = 'The notifications about this were not acknowledged automatically: call aipe_notifications and pass the handled ids in ack_ids.';
+
+async function unackedNotifications(ctx: ToolContext, c: AipeClient): Promise<Ntf[]> {
+  const out: Ntf[] = [];
+  let cursor: string | null | undefined;
+  for (let page = 0; page < AUTO_ACK_PAGES; page++) {
+    const query = typeof cursor === 'string' ? { cursor } : {};
+    const r = await c.listNotifications(undefined, undefined, { query });
+    out.push(...(r.items as Ntf[]).filter((n) => !n.acked && NOTIFICATION_ID.test(n.id)));
+    cursor = r.next_cursor;
+    if (r.items.length < NOTIFICATIONS_PAGE || typeof cursor !== 'string' || ctx.scope.deadlineHit) break;
+  }
+  return out;
+}
+
+/**
+ * Acks the unacked notifications `pick` says this call handled. Best effort: the call's own
+ * action already succeeded, so a failure here only adds ACK_FALLBACK to the result.
+ */
+async function ackHandled(ctx: ToolContext, c: AipeClient, pick: (n: Ntf) => boolean | Promise<boolean>): Promise<Record<string, unknown>> {
+  try {
+    const ids: string[] = [];
+    for (const n of await unackedNotifications(ctx, c)) if (await pick(n)) ids.push(n.id);
+    if (ids.length === 0) return {};
+    await idem(ctx, 'ackNotifications', { ids }, (k) => c.ackNotifications(undefined, { ids }, opt(k)));
+    clear(ctx, 'ack');
+    return { notifications_acked: ids };
+  } catch {
+    return { notifications_ack: ACK_FALLBACK };
+  }
+}
+
+/** A notification about this offer (made to you, or closed). */
+const aboutOffer = (offerId: string) => (n: Ntf) => (n.kind === 'offer_received' || n.kind === 'offer_closed') && n.ref_id === offerId;
+
+/** Notifications a declaration handles: the commitment's reminders and the accepted offer that started its trade. */
+function aboutCommitment(c: AipeClient, commitmentId: string): (n: Ntf) => Promise<boolean> {
+  let exchange: Promise<string | null> | undefined;
+  return async (n) => {
+    if ((n.kind === 'deadline_24h' || n.kind === 'deadline_1h') && n.ref_id === commitmentId) return true;
+    if (n.kind !== 'offer_accepted') return false;
+    exchange ??= c.getCommitment({ id: commitmentId }).then((x) => x.exchange_id, () => null);
+    return n.ref_id === (await exchange);
+  };
+}
+
+/**
+ * Notifications a finished listing handles (closed, withdrawn or reviewed): its own
+ * listing_closed and review_pending, and the offers to or from it that are no longer pending.
+ */
+function aboutListing(ctx: ToolContext, c: AipeClient, listingId: string): (n: Ntf) => Promise<boolean> {
+  let offers: Promise<Map<string, OfferItem>> | undefined;
+  const exchanges = new Map<string, Promise<boolean>>();
+  const loadOffers = async (): Promise<Map<string, OfferItem>> => {
+    const m = new Map<string, OfferItem>();
+    for (const box of ['inbox', 'outbox'] as const) {
+      let cursor: string | null | undefined;
+      for (let page = 0; page < AUTO_ACK_LOOKUPS; page++) {
+        const query = typeof cursor === 'string' ? { cursor } : {};
+        const r = box === 'inbox' ? await c.listInbox(undefined, undefined, { query }) : await c.listOutbox(undefined, undefined, { query });
+        for (const i of r.items as unknown as OfferItem[]) m.set(i.id, i);
+        cursor = r.next_cursor;
+        if (typeof cursor !== 'string' || ctx.scope.deadlineHit) break;
+      }
+    }
+    return m;
+  };
+  return async (n) => {
+    if ((n.kind === 'listing_closed' || n.kind === 'review_pending') && n.ref_id === listingId) return true;
+    if (n.kind === 'offer_received' || n.kind === 'offer_closed') {
+      offers ??= loadOffers();
+      const o = (await offers).get(n.ref_id);
+      return o !== undefined && o.status !== 'PENDING' && (o.source_listing_id === listingId || o.target_listing_id === listingId);
+    }
+    if (n.kind === 'offer_accepted') {
+      if (!exchanges.has(n.ref_id) && exchanges.size >= AUTO_ACK_LOOKUPS) return false;
+      if (!exchanges.has(n.ref_id)) exchanges.set(n.ref_id, c.getExchange({ id: n.ref_id }).then((x) => x.own_listing_id === listingId || x.partner_listing_id === listingId, () => false));
+      return (await exchanges.get(n.ref_id)) === true;
+    }
+    return false;
+  };
+}
+
 // ------------------------------------------------------------------ listings
 
 export const listingCreateTool: ToolImpl = {
@@ -88,7 +217,7 @@ export const listingGetTool: ToolImpl = {
     const l = (await guarded(ctx, 'getListing', () => c.getListing({ id }))) as unknown as Record<string, unknown>;
     const fields = fieldsOf(l.untrusted_content as Fields);
     await ctx.rt.state.update((s) => recordSeen(s, String(l.id), 'detail', ctx.rt.now(), fields));
-    return { status: 'ok', listing: listingView(l) };
+    return { status: 'ok', listing: listingView(l), next: URL_CHECK };
   },
 };
 
@@ -99,7 +228,7 @@ export const listingEndTool: ToolImpl = {
     const id = String(args.listing_id);
     const route = args.action === 'close' ? 'closeListing' : 'withdrawListing';
     const l = await idem(ctx, route, { id }, (k) => (route === 'closeListing' ? c.closeListing({ id }, undefined, opt(k)) : c.withdrawListing({ id }, undefined, opt(k))));
-    return { status: 'ok', listing: listingView(l as never) };
+    return { status: 'ok', listing: listingView(l as never), ...(await ackHandled(ctx, c, aboutListing(ctx, c, id))) };
   },
 };
 
@@ -109,6 +238,9 @@ export const searchTool: ToolImpl = {
   async execute(args, ctx) {
     const given = ['keywords', 'cursor', 'suggest_for'].filter((k) => args[k] !== undefined);
     if (given.length !== 1) throw new LocalFailure('SCHEMA_INVALID', 'pass exactly one of keywords, cursor or suggest_for', { extra: { field: 'keywords' } });
+    if (typeof args.suggest_for === 'string' && ID_LIKE.test(args.suggest_for.trim())) {
+      throw new LocalFailure('SCHEMA_INVALID', 'suggest_for takes a word or the start of a keyword, not an id', { extra: { field: 'suggest_for', hint: 'Pass plain text, for example a word from your project summary such as "garden" or "dev".' } });
+    }
     const c = await client(ctx);
     const key = canonicalJson(args);
     const nowMs = ctx.rt.now();
@@ -119,14 +251,23 @@ export const searchTool: ToolImpl = {
     let out: StatusObject;
     if (typeof args.suggest_for === 'string') {
       const r = await guarded(ctx, 'suggestKeywords', () => c.suggestKeywords(undefined, undefined, { query: { q: String(args.suggest_for) } }));
-      out = { status: 'ok', untrusted: fieldsOf(r.untrusted_content as Fields) };
+      const fields = fieldsOf(r.untrusted_content as Fields);
+      const found = Array.isArray(fields?.keywords) ? fields.keywords.length : 0;
+      out = {
+        status: 'ok',
+        untrusted: fields,
+        next:
+          found > 0
+            ? `${found} keyword(s) used by other agents' open listings. Search with some of them in aipe_search keywords, or use the fitting ones in your own listing.`
+            : 'No open listing of another agent uses a keyword like this yet. Try a shorter or broader word, or search with aipe_search keywords. You can still use your own keywords in your listing.',
+      };
     } else {
       const query = typeof args.cursor === 'string' ? { cursor: args.cursor } : { keywords: (args.keywords as string[]).join(',') };
       const r = await guarded(ctx, 'searchListings', () => c.searchListings(undefined, undefined, { query }));
       await ctx.rt.state.update((s) => {
         for (const i of r.items) recordSeen(s, i.id, 'search', ctx.rt.now());
       });
-      out = { status: 'ok', items: r.items.map((i) => listingView(i as never)), next_cursor: r.next_cursor };
+      out = { status: 'ok', items: r.items.map((i) => listingView(i as never)), next_cursor: r.next_cursor, ...(r.items.length === 0 ? {} : { next: `Read a listing with aipe_listing_get before you offer. ${URL_CHECK}` }) };
     }
     ctx.rt.searches.set(key, out, nowMs);
     return out;
@@ -146,6 +287,7 @@ function reviewFirst(listingId: string, reason: string, fields: unknown): Status
 }
 
 export const offerSendTool: ToolImpl = {
+  precheck: urlsCheckedFirst,
   summary: (a) => `Offer a trade from your listing ${String(a.source_listing_id)} to the listing ${String(a.target_listing_id)}.`,
   async execute(args, ctx) {
     const c = await client(ctx);
@@ -158,7 +300,11 @@ export const offerSendTool: ToolImpl = {
     try {
       const r = await guarded(ctx, 'sendOffer', () => idem(ctx, 'sendOffer', body, (k) => c.sendOffer(undefined, body, opt(k))));
       clear(ctx, 'send');
-      return { status: 'ok', offer: { id: r.id, status: r.status, source_listing_id: r.source_listing_id, target_listing_id: r.target_listing_id, max_deadline_at: r.max_deadline_at } };
+      return {
+        status: 'ok',
+        offer: { id: r.id, status: r.status, source_listing_id: r.source_listing_id, target_listing_id: r.target_listing_id, max_deadline_at: r.max_deadline_at },
+        next: `Sent; the other agent decides. If they accept, a trade starts and you owe what their listing asks: see aipe_notifications and aipe_commitments_list. ${PARTNER_CHECK}`,
+      };
     } catch (err) {
       return challengeResult(ctx, err);
     }
@@ -183,34 +329,65 @@ export const offersListTool: ToolImpl = {
           recordSeen(s, i.target_listing_id, box, ctx.rt.now());
         }
       });
-      return { status: 'ok', items: r.items.map((i) => offerView(i as never)), next_cursor: r.next_cursor };
+      const out: StatusObject = { status: 'ok', items: r.items.map((i) => offerView(i as never)), next_cursor: r.next_cursor };
+      const hint = box === 'inbox' ? inboxNext(r.items as unknown as OfferItem[]) : null;
+      return hint === null ? out : { ...out, next: `${hint} ${URL_CHECK}` };
     });
   },
 };
+
+interface OfferItem {
+  id: string;
+  status: string;
+  source_listing_id: string;
+  target_listing_id: string;
+}
+
+/** Pending offers to you, by your listing (ids only). */
+function pendingByListing(items: readonly OfferItem[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const i of items) {
+    if (i.status !== 'PENDING' || !OFFER_ID.test(i.id) || !LISTING_ID.test(i.target_listing_id)) continue;
+    out.set(i.target_listing_id, [...(out.get(i.target_listing_id) ?? []), i.id]);
+  }
+  return out;
+}
+
+/** The inbox `next`: decide on every pending offer; decline what you will not take. */
+export function inboxNext(items: readonly OfferItem[]): string | null {
+  const by = pendingByListing(items);
+  if (by.size === 0) return null;
+  const parts = [...by].map(([l, ids]) => `${ids.join(', ')} to your listing ${l}`);
+  return `Pending offers: ${parts.join('; ')}. Decide on each: read the offering listing with aipe_listing_get and check its target_urls, accept the best fit with aipe_offer_accept, and decline the others with aipe_offer_close (action decline) so their agents are not left waiting.`;
+}
 
 /** Most inbox pages read while looking for one offer (there is no route that fetches one offer). */
 export const INBOX_PAGES_MAX = 20;
 
 /** Finds an offer in the inbox, page by page (an offer past the first page is still found). */
-async function findInInbox(ctx: ToolContext, c: AipeClient, id: string): Promise<{ source_listing_id: string } | undefined> {
+async function findInInbox(ctx: ToolContext, c: AipeClient, id: string, seen: OfferItem[] = []): Promise<OfferItem | undefined> {
   let cursor: string | null | undefined;
+  let hit: OfferItem | undefined;
   for (let page = 0; page < INBOX_PAGES_MAX; page++) {
     const query = typeof cursor === 'string' ? { cursor } : {};
     const r = await guarded(ctx, 'listInbox', () => c.listInbox(undefined, undefined, { query }));
-    const hit = r.items.find((i) => i.id === id);
-    if (hit !== undefined) return hit;
+    seen.push(...(r.items as unknown as OfferItem[]));
+    hit ??= (r.items as unknown as OfferItem[]).find((i) => i.id === id);
     cursor = r.next_cursor;
-    if (typeof cursor !== 'string' || ctx.scope.deadlineHit) return undefined;
+    // the page with the offer is read to its end, so its other pending offers are known too
+    if (hit !== undefined || typeof cursor !== 'string' || ctx.scope.deadlineHit) return hit;
   }
-  return undefined;
+  return hit;
 }
 
 export const offerAcceptTool: ToolImpl = {
+  precheck: urlsCheckedFirst,
   summary: (a) => `Accept the offer ${String(a.offer_id)}. This starts a trade: you then owe the promotion your listing promised.`,
   async execute(args, ctx) {
     const c = await client(ctx);
     const id = String(args.offer_id);
-    const offer = await findInInbox(ctx, c, id);
+    const seen: OfferItem[] = [];
+    const offer = await findInInbox(ctx, c, id, seen);
     if (offer === undefined) throw new LocalFailure('LOCAL_OFFER_NOT_FOUND', 'that offer is not in your inbox');
     const source = offer.source_listing_id;
     const fresh = (await guarded(ctx, 'getListing', () => c.getListing({ id: source }))) as unknown as Record<string, unknown>;
@@ -219,12 +396,22 @@ export const offerAcceptTool: ToolImpl = {
     if (!gate.ok) return reviewFirst(source, gate.reason, fields);
     const r = await idem(ctx, 'acceptOffer', { id }, (k) => c.acceptOffer({ id }, {}, opt(k)));
     clear(ctx, 'accept');
+    const acks = await ackHandled(ctx, c, aboutOffer(id));
+    // decline guidance (trade test 22 Nov): the other offers to the same listing still wait
+    const others = (pendingByListing(seen).get(offer.target_listing_id) ?? []).filter((x) => x !== id);
+    const declineHint =
+      others.length === 0
+        ? ''
+        : ` Other offers to the same listing are still pending: ${others.join(', ')}. Decline each one you will not take with aipe_offer_close (action decline), so their agents are not left waiting.`;
     return {
       status: 'ok',
       exchange_id: r.exchange_id,
       commitment_id: r.commitment_id,
       deadline_at: r.deadline_at,
       owes: 'What the offering listing asks (its request, for its target URLs), before deadline_at. Your owner does it, or you only with your owner\'s explicit permission; then declare it with aipe_commitment_complete.',
+      ...(others.length === 0 ? {} : { other_pending_offers: others }),
+      ...acks,
+      next: `${PARTNER_CHECK}${declineHint}`,
     };
   },
 };
@@ -237,7 +424,7 @@ export const offerCloseTool: ToolImpl = {
     const withdraw = args.action === 'withdraw';
     const r = await idem(ctx, withdraw ? 'withdrawOffer' : 'declineOffer', { id }, (k) => (withdraw ? c.withdrawOffer({ id }, {}, opt(k)) : c.declineOffer({ id }, {}, opt(k))));
     clear(ctx, withdraw ? 'withdraw' : 'decline');
-    return { status: 'ok', id: r.id, offer_status: r.status, decided_at: r.decided_at };
+    return { status: 'ok', id: r.id, offer_status: r.status, decided_at: r.decided_at, ...(await ackHandled(ctx, c, aboutOffer(id))) };
   },
 };
 
@@ -267,7 +454,7 @@ export const commitmentCompleteTool: ToolImpl = {
     const id = String(args.commitment_id);
     const body = { completed: true as const, ...(typeof args.proof_url === 'string' ? { proof: args.proof_url } : {}) };
     const r = await idem(ctx, 'completeCommitment', { id, body }, (k) => c.completeCommitment({ id }, body, opt(k)));
-    return { status: 'ok', commitment_status: 'DECLARED_DONE', proof_recorded: r.proof_recorded };
+    return { status: 'ok', commitment_status: 'DECLARED_DONE', proof_recorded: r.proof_recorded, ...(await ackHandled(ctx, c, aboutCommitment(c, id))) };
   },
 };
 
@@ -307,7 +494,7 @@ export const reviewSubmitTool: ToolImpl = {
     const body = { reviews: args.reviews as { commitment_id: string; fulfilled: boolean }[] };
     const r = await idem(ctx, 'submitReviews', { id, body }, (k) => c.submitReviews({ id }, body, opt(k)));
     // extra members (for example a support offer) are dropped
-    return { status: 'ok', result: 'reviews_recorded', participants_reviewed: r.participants_reviewed, next: 'Recorded.' };
+    return { status: 'ok', result: 'reviews_recorded', participants_reviewed: r.participants_reviewed, ...(await ackHandled(ctx, c, aboutListing(ctx, c, id))), next: 'Recorded.' };
   },
 };
 
@@ -316,7 +503,7 @@ export const reviewSubmitTool: ToolImpl = {
 export const NOTIFICATION_MAP: Readonly<Record<string, { suggested_tool: string | null; advice: string }>> = {
   offer_received: { suggested_tool: 'aipe_offers_list', advice: 'An offer was made to you. Look at it with aipe_offers_list (box inbox).' },
   offer_accepted: { suggested_tool: 'aipe_commitments_list', advice: 'An offer was accepted: a trade started. See what you owe with aipe_commitments_list (status open).' },
-  offer_closed: { suggested_tool: 'aipe_offers_list', advice: 'An offer was closed.' },
+  offer_closed: { suggested_tool: 'aipe_offers_list', advice: 'An offer was closed. Nothing to do: it is acknowledged once shown.' },
   deadline_24h: { suggested_tool: 'aipe_commitments_list', advice: 'A promotion you owe is due within a day.' },
   deadline_1h: { suggested_tool: 'aipe_commitments_list', advice: 'A promotion you owe is due within an hour.' },
   listing_closed: { suggested_tool: 'aipe_reviews_pending', advice: 'A listing closed: review your partners.' },
@@ -346,15 +533,51 @@ export const notificationsTool: ToolImpl = {
     const out = await polled(ctx, 'notifications', listArgs, async () => {
       const query = { ...(args.include_acked === true ? { include_acked: true } : {}), ...(typeof args.cursor === 'string' ? { cursor: args.cursor } : {}) };
       const r = await c.listNotifications(undefined, undefined, { query });
+      const seenNow = await ackOnRead(ctx, c, r.items as Ntf[]);
       return {
         status: 'ok',
-        items: r.items.map((n) => ({ id: n.id, kind: n.kind, ref_id: n.ref_id, created_at: n.created_at, acked: n.acked, ...(n.reason === undefined ? {} : { reason: n.reason }), ...(NOTIFICATION_MAP[n.kind] ?? { suggested_tool: null, advice: 'Call aipe_status.' }) })),
+        items: r.items.map((n) => ({ id: n.id, kind: n.kind, ref_id: n.ref_id, created_at: n.created_at, acked: n.acked || seenNow.includes(n.id), ...(n.reason === undefined ? {} : { reason: n.reason }), ...(NOTIFICATION_MAP[n.kind] ?? { suggested_tool: null, advice: 'Call aipe_status.' }) })),
         next_cursor: r.next_cursor,
+        ...(seenNow.length === 0 ? {} : { auto_acked: seenNow }),
       };
     });
-    return acked === undefined ? out : { ...out, acked };
+    const withNext = out.status === 'ok' ? { ...out, next: notificationsNext((out.items ?? []) as { id: string; acked: boolean }[]) } : out;
+    return acked === undefined ? withNext : { ...withNext, acked };
   },
 };
+
+/** Kinds that only inform (nothing to do with a tool): acknowledged once shown. */
+export const INFO_ONLY_KINDS: ReadonlySet<string> = new Set(['offer_closed', 'webhook_disabled']);
+
+/** Acks the shown info-only notifications; returns their ids ([] when none, or on failure). */
+async function ackOnRead(ctx: ToolContext, c: AipeClient, items: readonly Ntf[]): Promise<string[]> {
+  const ids = items.filter((n) => !n.acked && INFO_ONLY_KINDS.has(n.kind) && NOTIFICATION_ID.test(n.id)).map((n) => n.id);
+  if (ids.length === 0) return [];
+  try {
+    await idem(ctx, 'ackNotifications', { ids }, (k) => c.ackNotifications(undefined, { ids }, opt(k)));
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+/** The API's notifications page size. */
+export const NOTIFICATIONS_PAGE = 50;
+
+/**
+ * The notifications `next` (trade test 22 Nov): ack what was handled. next_cursor is a polling
+ * cursor (the API returns the last item's position even when nothing more is waiting), so the
+ * hint says what it is for.
+ */
+export function notificationsNext(items: readonly { id: string; acked: boolean }[]): string {
+  const open = items.filter((n) => !n.acked && NOTIFICATION_ID.test(n.id)).map((n) => n.id);
+  const cursorNote =
+    items.length >= NOTIFICATIONS_PAGE
+      ? 'There may be more: pass next_cursor as cursor to read the next page.'
+      : 'next_cursor is where this page ends, not a sign of more: pass it as cursor later to see only newer notifications.';
+  if (open.length === 0) return `Nothing to acknowledge. ${cursorNote}`;
+  return `Handle each one with its suggested_tool. Then acknowledge the handled ones so they stop showing: call aipe_notifications with ack_ids ${JSON.stringify(open)}. ${cursorNote}`;
+}
 
 // ------------------------------------------------------------------ report
 

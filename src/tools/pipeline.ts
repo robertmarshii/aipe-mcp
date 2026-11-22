@@ -29,6 +29,8 @@ export type Summariser = (args: Record<string, unknown>) => string;
 export interface ToolImpl {
   execute: Executor;
   summary?: Summariser;
+  /** A local check before the confirmation step: a status object stops the call (nothing sent). */
+  precheck?: (args: Record<string, unknown>) => StatusObject | null;
 }
 
 export interface CallInput {
@@ -42,7 +44,7 @@ export interface CallInput {
 
 export type CallOutput = ToolResult | { defer: unknown };
 
-/** DEC26: an owner-opt-in tool (aipe_offer_accept) is H only under AIPE_CONFIRM_ACCEPT=owner. */
+/** DEC26: an owner-opt-in tool (aipe_offer_accept) is H only under AIPE_CONFIRM_ACCEPT=owner (implied by AIPE_CONFIRM=owner or strict). */
 export function confirmSpecOf(spec: ToolSpec, confirmAccept: 'agent' | 'owner'): ToolSpec {
   return spec.ownerOptIn === true && confirmAccept === 'owner' ? { ...spec, confirm: 'standard', human: true } : spec;
 }
@@ -50,6 +52,7 @@ export function confirmSpecOf(spec: ToolSpec, confirmAccept: 'agent' | 'owner'):
 export async function runTool(c: CallInput): Promise<CallOutput> {
   const { rt, spec } = c;
   const { confirm_token: confirmToken, ...args } = c.args as Record<string, unknown> & { confirm_token?: unknown };
+  rt.activity.begin();
   try {
     // 1. preflight
     const pf = preflight(textFields(args, spec.preflight), rt.keys.seeds());
@@ -61,6 +64,9 @@ export async function runTool(c: CallInput): Promise<CallOutput> {
       const d = await confirmPossibleSecret(c.port, pf.field, value, rt.cfg.confirmVia);
       if (!d.proceed) return 'defer' in d ? { defer: d.defer } : toToolResult(d.result as unknown as StatusObject);
     }
+    // 1b. the tool's own local check (before any owner is asked)
+    const stop = c.impl.precheck?.(args) ?? null;
+    if (stop !== null) return toToolResult(stop);
     // 2. confirmation
     const gate = await confirmGate({
       spec: confirmSpecOf(spec, rt.cfg.confirmAccept),
@@ -72,6 +78,7 @@ export async function runTool(c: CallInput): Promise<CallOutput> {
       summary: c.impl.summary?.(args) ?? `${spec.title}.`,
       port: c.port,
       tokens: rt.tokens,
+      activity: rt.activity,
     });
     if (!gate.proceed) return 'defer' in gate ? { defer: gate.defer } : toToolResult(gate.result as unknown as StatusObject);
     // 3. a recovered key takes over before any non-read-only tool (never in aipe_status)
@@ -94,6 +101,8 @@ export async function runTool(c: CallInput): Promise<CallOutput> {
   } catch (err) {
     rt.log('warn', 'TOOL_ERROR', { tool: spec.name });
     return toToolResult(normaliseError(err, { nowMs: rt.now() }));
+  } finally {
+    rt.activity.end();
   }
 }
 

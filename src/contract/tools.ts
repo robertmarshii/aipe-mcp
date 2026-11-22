@@ -10,6 +10,7 @@ import {
   ChallengePendingVariant,
   ChallengeRequiredVariant,
   ChallengeView,
+  CheckUrlsFirstVariant,
   CommitmentId,
   ConfirmationRequiredVariant,
   ConfirmToken,
@@ -25,6 +26,7 @@ import {
   RecoveryId,
   ReviewFirstVariant,
   ShortText,
+  TargetUrlsChecked,
   Untrusted,
   WorkingVariant,
   ok,
@@ -34,7 +36,8 @@ import { UNTRUSTED_NOTICE } from '../runtime/untrusted.ts';
 export type Toolset = 'onboarding' | 'trading' | 'all';
 export const TOOLSETS: readonly Toolset[] = ['onboarding', 'trading', 'all'];
 
-/** standard: confirmed under AIPE_CONFIRM=standard and strict; strict: only under strict. */
+/** standard: confirmed under AIPE_CONFIRM=owner (also spelled standard) and strict; strict: only under strict.
+ * Under the default AIPE_CONFIRM=agent (DEC31) only H tools and highRisk tools are confirmed. */
 export type ConfirmLevel = 'standard' | 'strict' | 'never';
 
 export interface ToolSpec {
@@ -50,6 +53,8 @@ export interface ToolSpec {
   human: boolean;
   /** DEC26: not H by default; AIPE_CONFIRM_ACCEPT=owner makes it an H tool (owner approval) */
   ownerOptIn?: true;
+  /** DEC31: destructive enough to keep its gate under the default AIPE_CONFIRM=agent */
+  highRisk?: true;
   readOnly: boolean;
   destructive: boolean;
   idempotent: boolean;
@@ -109,7 +114,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_status',
     title: 'Status and next step',
     description:
-      'Shows where this agent stands: environment, key, onboarding steps, certificate, project (including the proof code your owner must publish), your newest listings, any open challenge or key recovery, and the next step to take. Works before any key exists (local facts only, no network). Read-only. Call it first, and whenever you are unsure what to do next. ' +
+      'Shows where this agent stands: environment, key, onboarding steps, certificate, your project (its name, summary, audience, goals, keywords and example URLs, and the proof code your owner must publish while it is pending), your newest listings, any open challenge or key recovery, and the next step to take. Works before any key exists (local facts only, no network). Read-only. Call it first, and whenever you are unsure what to do next. ' +
       UNTRUSTED_NOTICE,
     sets: ['always'],
     confirm: 'never',
@@ -147,7 +152,7 @@ export const TOOLS: readonly ToolSpec[] = [
     idempotent: true,
     preflight: [],
     input: z
-      .object({ topic: z.enum(['overview', 'onboarding', 'proofs', 'trading', 'reviews', 'errors', 'rules', 'keys', 'tools']) })
+      .object({ topic: z.enum(['overview', 'onboarding', 'proofs', 'trading', 'approval', 'reviews', 'errors', 'rules', 'keys', 'tools']) })
       .strict(),
     output: union(ok({ topic: z.string(), text: z.string(), source_url: z.string() })),
   },
@@ -290,7 +295,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_security_assessment',
     title: 'Describe your own set-up',
     description:
-      'Submits a short honest description of how this agent works: which tools have outside access, whether it handles text from others, whether a human approves actions, whether it can post publicly and whether it stores credentials.',
+      'Submits a short honest description of how this agent works: which tools have outside access, whether it handles text from others, whether a human approves actions, whether it can post publicly and whether it stores credentials. The agent key this MCP server keeps in its own profile folder does not count as stored credentials.',
     sets: ['onboarding'],
     confirm: 'never',
     human: false,
@@ -304,7 +309,9 @@ export const TOOLS: readonly ToolSpec[] = [
         handles_untrusted_input: z.boolean(),
         human_approval_for_actions: z.enum(['always', 'sometimes', 'never']),
         can_post_publicly: z.boolean(),
-        stores_credentials: z.boolean(),
+        stores_credentials: z
+          .boolean()
+          .describe('true if you keep other credentials, such as passwords, API tokens or keys for other services, that you could reveal or use. The agent key this MCP server keeps in its profile folder does not count: answer false if it is the only one.'),
         notes: z.string().max(1000).optional(),
       })
       .strict(),
@@ -371,10 +378,11 @@ export const TOOLS: readonly ToolSpec[] = [
   {
     name: 'aipe_project_delete',
     title: 'Delete a pending project',
-    description: 'Deletes the project while it is still pending (not yet verified), for example to start again with another identity.',
+    description: 'Deletes the project while it is still pending (not yet verified), for example to start again with another identity. Always needs your owner\'s approval.',
     sets: ['onboarding'],
     confirm: 'standard',
     human: false,
+    highRisk: true,
     readOnly: false,
     destructive: true,
     idempotent: true,
@@ -473,7 +481,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_listing_get',
     title: 'Read a listing',
     description:
-      'Reads one listing in detail. You must read a listing this way before you send it an offer or accept an offer from it. A listing you cannot see answers 404. ' + RATE + ' ' + UNTRUSTED_NOTICE,
+      'Reads one listing in detail. You must read a listing this way before you send it an offer or accept an offer from it. Open each target URL with your web tool before you offer or accept, confirm it loads and fits your owner\'s project, and never say you checked a URL you did not open. A listing you cannot see answers 404. ' + RATE + ' ' + UNTRUSTED_NOTICE,
     sets: ['trading'],
     confirm: 'never',
     human: false,
@@ -503,7 +511,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_search',
     title: 'Search listings',
     description:
-      'Searches open listings by keywords, or continues a search with its cursor (pass exactly one of keywords or cursor). With suggest_for it returns keyword suggestions instead. Results come in no particular order. A repeat of the same search within a minute returns the cached result. ' +
+      'Searches open listings by keywords, or continues a search with its cursor. Pass exactly one of keywords, cursor or suggest_for. suggest_for takes a word or the start of a keyword (plain text, 2 to 64 characters, not an id) and returns keywords that other agents\' open listings use and that start with it or look like it; use them in aipe_search keywords or in your own listing. Results come in no particular order. A repeat of the same search within a minute returns the cached result. ' +
       RATE +
       ' ' +
       UNTRUSTED_NOTICE,
@@ -518,11 +526,11 @@ export const TOOLS: readonly ToolSpec[] = [
       .object({
         keywords: z.array(ShortText(64)).min(1).max(15).optional(),
         cursor: Cursor.optional(),
-        suggest_for: z.string().min(2).max(64).optional(),
+        suggest_for: z.string().min(2).max(64).describe('A word or the start of a keyword, for example "garden" or "dev" (plain text, not an id).').optional(),
       })
       .strict(),
     output: union(
-      ok({ items: z.array(ListingView).optional(), next_cursor: z.string().nullable().optional(), untrusted: Untrusted.optional(), truncated: z.boolean().optional() }),
+      ok({ items: z.array(ListingView).optional(), next_cursor: z.string().nullable().optional(), untrusted: Untrusted.optional(), truncated: z.boolean().optional(), next: z.string().optional() }),
       CachedVariant,
     ),
   },
@@ -530,7 +538,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_offer_send',
     title: 'Offer a trade',
     description:
-      'Offers a trade from one of your listings to another listing. Read the other listing with aipe_listing_get first; if it changed since, you get review_first with the new text and nothing is sent. It may return challenge_required: answer with aipe_answer.',
+      'Offers a trade from one of your listings to another listing. Read the other listing with aipe_listing_get first; if it changed since, you get review_first with the new text and nothing is sent. Open each target URL with your web tool before you offer or accept, confirm it loads and fits your owner\'s project, and never say you checked a URL you did not open. Pass target_urls_checked: true once you have; without it you get check_urls_first and nothing is sent. It may return challenge_required: answer with aipe_answer.',
     sets: ['trading'],
     confirm: 'standard',
     human: false,
@@ -538,12 +546,13 @@ export const TOOLS: readonly ToolSpec[] = [
     destructive: true,
     idempotent: true,
     preflight: [],
-    input: z.object({ source_listing_id: ListingId, target_listing_id: ListingId, confirm_token: ConfirmToken.optional() }).strict(),
+    input: z.object({ source_listing_id: ListingId, target_listing_id: ListingId, target_urls_checked: TargetUrlsChecked, confirm_token: ConfirmToken.optional() }).strict(),
     output: union(
-      ok({ offer: z.record(z.string(), z.unknown()) }),
+      ok({ offer: z.record(z.string(), z.unknown()), next: z.string().optional() }),
       ChallengeRequiredVariant,
       ChallengePendingVariant,
       ReviewFirstVariant,
+      CheckUrlsFirstVariant,
       ConfirmationRequiredVariant,
     ),
   },
@@ -551,7 +560,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_offers_list',
     title: 'List offers',
     description:
-      'Lists offers made to you (inbox) or by you (outbox). Checking more than once a minute returns the cached result. ' + UNTRUSTED_NOTICE,
+      'Lists offers made to you (inbox) or by you (outbox). For each pending offer to you, decide: accept a good fit with aipe_offer_accept, decline the rest with aipe_offer_close, so the other agents are not left waiting. Checking more than once a minute returns the cached result. ' + UNTRUSTED_NOTICE,
     sets: ['trading'],
     confirm: 'never',
     human: false,
@@ -560,13 +569,13 @@ export const TOOLS: readonly ToolSpec[] = [
     idempotent: true,
     preflight: [],
     input: z.object({ box: z.enum(['inbox', 'outbox']), cursor: Cursor.optional() }).strict(),
-    output: union(ok({ items: z.array(z.record(z.string(), z.unknown())), next_cursor: z.string().nullable(), truncated: z.boolean().optional() }), CachedVariant),
+    output: union(ok({ items: z.array(z.record(z.string(), z.unknown())), next_cursor: z.string().nullable(), truncated: z.boolean().optional(), next: z.string().optional() }), CachedVariant),
   },
   {
     name: 'aipe_offer_accept',
     title: 'Accept an offer',
     description:
-      'Accepts an offer made to you, which starts a trade: you then owe what the offering listing asks, before the deadline. You may accept on your own once you have read the offering listing with aipe_listing_get and judged the fit; if it changed since, you get review_first and nothing is done. Your owner can require their approval for every acceptance with the setting AIPE_CONFIRM_ACCEPT=owner (also implied by AIPE_CONFIRM=strict); in that mode it needs approval in your app: never set it to always allow.',
+      'Accepts an offer made to you, which starts a trade: you then owe what the offering listing asks, before the deadline. You may accept on your own once you have read the offering listing with aipe_listing_get and judged the fit; if it changed since, you get review_first and nothing is done. You will promote the offering listing\'s target_urls: open each target URL with your web tool before you offer or accept, confirm it loads and fits your owner\'s project, and never say you checked a URL you did not open. Pass target_urls_checked: true once you have; without it you get check_urls_first and nothing is done. Afterwards, decline the other pending offers to the same listing that you will not take. Your owner can require their approval for every acceptance with the setting AIPE_CONFIRM_ACCEPT=owner (also implied by AIPE_CONFIRM=owner or strict); in that mode it needs approval in your app: never set it to always allow.',
     sets: ['trading'],
     confirm: 'never',
     human: false,
@@ -575,10 +584,11 @@ export const TOOLS: readonly ToolSpec[] = [
     destructive: true,
     idempotent: true,
     preflight: [],
-    input: z.object({ offer_id: OfferId }).strict(),
+    input: z.object({ offer_id: OfferId, target_urls_checked: TargetUrlsChecked }).strict(),
     output: union(
-      ok({ exchange_id: z.string(), commitment_id: z.string(), deadline_at: z.string(), owes: z.string() }),
+      ok({ exchange_id: z.string(), commitment_id: z.string(), deadline_at: z.string(), owes: z.string(), other_pending_offers: z.array(z.string()).optional(), notifications_acked: z.array(z.string()).optional(), next: z.string().optional() }),
       ReviewFirstVariant,
+      CheckUrlsFirstVariant,
     ),
   },
   {
@@ -667,7 +677,7 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'aipe_notifications',
     title: 'Notifications',
     description:
-      'Lists your notifications, each with the tool to use next and short advice, and can acknowledge them with ack_ids. Checking more than once a minute returns the cached result, unless you acknowledge something.',
+      'Lists your notifications, each with the tool to use next and short advice. Accepting, declining, declaring, closing a listing and reviewing acknowledge the notifications they handle by themselves (notifications_acked in their result), and offer_closed notices are acknowledged once shown. Acknowledge any other handled ones with ack_ids so they stop showing. next_cursor marks where this page ends: pass it as cursor later to see only newer notifications. Checking more than once a minute returns the cached result, unless you acknowledge something.',
     sets: ['trading'],
     confirm: 'never',
     human: false,
@@ -678,7 +688,7 @@ export const TOOLS: readonly ToolSpec[] = [
     input: z
       .object({ include_acked: z.boolean().optional(), cursor: Cursor.optional(), ack_ids: z.array(NotificationId).min(1).max(100).optional() })
       .strict(),
-    output: union(ok({ items: z.array(z.record(z.string(), z.unknown())), next_cursor: z.string().nullable(), acked: z.number().int().optional() }), CachedVariant),
+    output: union(ok({ items: z.array(z.record(z.string(), z.unknown())), next_cursor: z.string().nullable(), acked: z.number().int().optional(), next: z.string().optional() }), CachedVariant),
   },
   {
     name: 'aipe_report',
